@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0b1220">
+<title>Probador OCR · Escaneo en vivo</title>
+<style>
+  :root {
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --panel: rgba(15, 23, 42, .82);
+    --border: #334155;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --hud: #39ff14;
+    --console: "Cascadia Code", "Cascadia Mono", "Consolas", "SF Mono", "Menlo", "DejaVu Sans Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none;
+    background: #0b1220; color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+  #app { position: fixed; inset: 0; }
+
+  #view {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; display: block;
+    touch-action: none;
+  }
+  #camVideo {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; opacity: 0; pointer-events: none;
+  }
+
+  .overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .overlay[hidden] { display: none; }
+
+  /* ---------- Arranque ---------- */
+  #startOverlay {
+    background: radial-gradient(900px 500px at 50% 0%, #1e293b 0%, #0b1220 70%);
+    flex-direction: column;
+  }
+  .start-card { text-align: center; max-width: 460px; }
+  .start-card h1 { margin: 0 0 8px; font-size: 1.9rem; letter-spacing: -.02em; }
+  .start-card h1 span { color: var(--hud); }
+  .start-card p { margin: 0 0 22px; color: var(--muted); font-size: .95rem; line-height: 1.5; }
+
+  /* ---------- Botones ---------- */
+  button {
+    font: inherit; cursor: pointer;
+    border: 1px solid var(--border); background: #273449; color: var(--text);
+    padding: 15px 22px; border-radius: 12px;
+    transition: filter .15s, background .15s, border-color .15s, opacity .15s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: linear-gradient(180deg, var(--hud), #12b81f);
+    border-color: transparent; color: #04220a; font-weight: 800;
+    font-size: 1.05rem; padding: 16px 26px;
+  }
+  button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+  button.accept {
+    background: linear-gradient(180deg, var(--hud), #12b81f);
+    border-color: transparent; color: #04220a; font-weight: 800; flex: 1;
+  }
+  button.cancel { flex: 1; background: #334155; }
+  button.cancel:hover { border-color: var(--err); }
+
+  .note {
+    margin-top: 18px; padding: 11px 14px; border-radius: 10px;
+    background: rgba(57,255,20,.08); border: 1px solid rgba(57,255,20,.4);
+    color: #d1ffc2; font-size: .86rem; line-height: 1.45;
+  }
+  .note a { color: var(--hud); font-weight: 700; }
+
+  /* ---------- Estado / toast / pista ---------- */
+  .pill {
+    display: inline-flex; align-items: center; gap: 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 14px 20px; border-radius: 999px; font-size: .95rem;
+    backdrop-filter: blur(8px);
+  }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--hud);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #hint {
+    position: absolute; left: 50%; bottom: calc(112px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%); z-index: 8;
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    padding: 10px 18px; border-radius: 999px; font-size: .85rem;
+    backdrop-filter: blur(8px); transition: opacity .5s; pointer-events: none;
+    white-space: nowrap;
+  }
+  #hint.hide { opacity: 0; }
+
+  #zoomPill {
+    position: absolute; left: 50%; top: calc(54px + env(safe-area-inset-top, 0px));
+    transform: translateX(-50%); z-index: 20;
+    background: var(--panel); border: 1px solid rgba(57,255,20,.5); color: #d1ffc2;
+    font-family: var(--console); font-weight: 800; font-size: 1rem;
+    padding: 8px 16px; border-radius: 999px;
+    backdrop-filter: blur(8px); transition: opacity .3s; pointer-events: none;
+  }
+  #zoomPill[hidden] { display: none; }
+  #zoomPill.hide { opacity: 0; }
+
+  #toast {
+    position: absolute; left: 50%; bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%); z-index: 20;
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 11px 18px; border-radius: 999px; font-size: .88rem;
+    max-width: 90vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    backdrop-filter: blur(8px); transition: opacity .35s;
+  }
+  #toast[hidden] { display: none; }
+  #toast.ok { border-color: rgba(57,255,20,.5); color: #d1ffc2; }
+  #toast.bad { border-color: rgba(239,68,68,.5); color: #fecaca; }
+
+  .fab {
+    position: absolute; z-index: 8;
+    top: calc(14px + env(safe-area-inset-top, 0px)); right: 14px;
+    width: 48px; height: 48px; padding: 0; border-radius: 50%;
+    font-size: 1.25rem; background: var(--panel); backdrop-filter: blur(8px);
+  }
+  .fab[hidden] { display: none; }
+  .fab.second { top: calc(72px + env(safe-area-inset-top, 0px)); color: var(--hud); }
+  .fab.second.off { color: var(--muted); border-color: var(--border); }
+  .fab.third { top: calc(130px + env(safe-area-inset-top, 0px)); font-size: 1.05rem; }
+  .fab.fourth { top: calc(188px + env(safe-area-inset-top, 0px)); font-size: 1.05rem; }
+  .fab.fifth { top: calc(246px + env(safe-area-inset-top, 0px)); font-size: 1.05rem; }
+  .fab.fifth.on { color: #04220a; background: var(--hud); border-color: transparent; }
+  .fab.home {
+    top: auto; right: auto;
+    left: 14px; bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    font-size: 1.4rem; font-weight: 800;
+  }
+
+  /* ---------- Botón de captura + focus + nivel ---------- */
+  #btnShutter {
+    position: absolute; z-index: 9;
+    left: 50%; bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    width: 78px; height: 78px; padding: 0; border-radius: 50%;
+    font-size: 2rem;
+    background: linear-gradient(180deg, var(--hud), #12b81f);
+    border: 3px solid rgba(255,255,255,.25); color: #04220a;
+    box-shadow: 0 8px 26px rgba(0,0,0,.45);
+  }
+  #btnShutter[hidden] { display: none; }
+  #btnShutter:active:not(:disabled) { filter: brightness(1.12); transform: translateX(-50%) scale(.95); }
+  #btnShutter.busy { opacity: .5; }
+
+  #levelWarn {
+    position: absolute; z-index: 12; left: 50%;
+    top: calc(14px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+    background: rgba(127,29,29,.9); border: 1px solid var(--err); color: #fecaca;
+    padding: 8px 16px; border-radius: 999px; font-size: .85rem; font-weight: 700;
+    backdrop-filter: blur(8px); white-space: nowrap;
+  }
+  #levelWarn[hidden] { display: none; }
+
+  #scanFx {
+    position: absolute; z-index: 11; pointer-events: none; border-radius: 6px;
+    overflow: hidden; opacity: 0; transition: opacity .12s;
+  }
+  #scanFx[hidden] { display: none; }
+  #scanFx.on { opacity: 1; }
+  #scanFx::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 3px; top: 0;
+    background: linear-gradient(90deg, transparent, var(--hud), transparent);
+    box-shadow: 0 0 16px var(--hud);
+    animation: scanline .28s linear infinite;
+  }
+  @keyframes scanline { from { top: 0; } to { top: 100%; } }
+
+  #focusRing {
+    position: absolute; z-index: 12; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+    border: 2px solid var(--hud); border-radius: 12px; pointer-events: none;
+    box-shadow: 0 0 12px var(--hud); animation: focusPulse .5s ease-out forwards;
+  }
+  #focusRing[hidden] { display: none; }
+  @keyframes focusPulse {
+    from { opacity: 1; transform: scale(1.3); }
+    to { opacity: 0; transform: scale(1); }
+  }
+
+  /* ---------- Ajustes (umbral) ---------- */
+  #settingsPanel {
+    position: absolute; z-index: 9;
+    top: calc(188px + env(safe-area-inset-top, 0px)); right: 72px;
+    width: min(260px, 74vw);
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 14px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 12px 34px rgba(0,0,0,.4);
+  }
+  #settingsPanel[hidden] { display: none; }
+  .sp-row { display: flex; align-items: center; justify-content: space-between; }
+  .sp-label { font-size: .85rem; color: var(--muted); }
+  .sp-value { font-family: var(--console); font-weight: 800; color: var(--hud); font-size: 1rem; }
+  .sp-sub { font-size: .68rem; color: var(--muted); margin-top: 2px; }
+  #thresholdSlider { width: 100%; margin: 10px 0 0; accent-color: var(--hud); }
+  .switch { display: inline-flex; align-items: center; cursor: pointer; }
+  .switch input { accent-color: var(--hud); width: 20px; height: 20px; }
+  .lr-valid { color: var(--ok); font-weight: 800; }
+  .lr-invalid { color: var(--warn); font-weight: 800; }
+
+  /* ---------- HUD reloj + fps del servidor ---------- */
+  #hudClock {
+    position: absolute; z-index: 9;
+    top: calc(14px + env(safe-area-inset-top, 0px)); left: 14px;
+    display: flex; align-items: center; gap: 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 6px 12px;
+    backdrop-filter: blur(8px); pointer-events: none;
+    font-family: var(--console); font-variant-numeric: tabular-nums;
+  }
+  #hudClock[hidden] { display: none; }
+  #clockTime { font-size: .92rem; font-weight: 800; color: #e2e8f0; letter-spacing: .02em; }
+  #clockFps { font-size: .82rem; font-weight: 800; color: var(--hud); min-width: 62px; text-align: right; }
+  #clockFps.idle { color: var(--muted); }
+
+  /* ---------- Readout en vivo (streaming) ---------- */
+  #liveReadout {
+    position: absolute; z-index: 8;
+    top: calc(54px + env(safe-area-inset-top, 0px)); left: 14px;
+    max-width: calc(100vw - 130px);
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 12px; padding: 9px 13px;
+    backdrop-filter: blur(8px); pointer-events: none;
+    transition: opacity .25s;
+  }
+  #liveReadout[hidden] { display: none; }
+  #liveReadout.dim { opacity: .55; }
+  #liveReadout.ok { border-left-color: var(--ok); }
+  #liveReadout.warn { border-left-color: var(--warn); }
+  #liveReadout.err { border-left-color: var(--err); }
+  .lr-text {
+    font-family: var(--console); font-weight: 800; letter-spacing: .05em;
+    font-size: 1.15rem; line-height: 1.2; color: #ecfccb;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lr-meta { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
+  .lr-conf { font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .lr-dots { font-size: .72rem; letter-spacing: .16em; color: var(--hud); }
+
+  /* ---------- Lectura OCR ---------- */
+  #resultOverlay { align-items: flex-end; }
+  .readout {
+    width: 100%; max-width: 720px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 18px; padding: 16px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+  }
+  .readout-top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 10px;
+  }
+  .readout-top .label {
+    font-size: .78rem; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700;
+  }
+  .badge {
+    font-size: .75rem; padding: 4px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: #273449; color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge.ok { color: #bbf7d0; border-color: rgba(34,197,94,.5); background: rgba(34,197,94,.12); }
+  .badge.warn { color: #fde68a; border-color: rgba(245,158,11,.5); background: rgba(245,158,11,.12); }
+  .badge.err { color: #fecaca; border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.12); }
+
+  #ocrText {
+    font-family: var(--console);
+    font-weight: 800;
+    font-variant-ligatures: none;
+    letter-spacing: .06em;
+    font-size: clamp(1.5rem, 7vw, 2.8rem);
+    line-height: 1.25;
+    color: #ecfccb;
+    text-shadow: 0 0 14px rgba(57,255,20,.35);
+    background: #0b1220; border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; min-height: 1.2em; outline: none;
+    max-height: 42vh; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+    caret-color: var(--hud);
+    user-select: text; -webkit-user-select: text;
+  }
+  #ocrText:empty::before {
+    content: "(sin texto detectado)"; color: #64748b; font-weight: 400;
+  }
+  .actions { display: flex; gap: 12px; margin-top: 14px; }
+
+  /* ---------- Resultado por celdas (captura estática) ---------- */
+  #cellRow {
+    display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px;
+    background: #0b1220; border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 12px; min-height: 74px;
+  }
+  #cellRow[hidden] { display: none; }
+  .cellGroup { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .cell {
+    width: clamp(38px, 10vw, 56px); height: clamp(48px, 12vw, 68px);
+    font-family: var(--console); font-weight: 800; font-size: clamp(1.3rem, 5.5vw, 2rem);
+    text-align: center; text-transform: uppercase;
+    color: #ecfccb; background: rgba(57,255,20,.06);
+    border: 2px solid var(--border); border-radius: 10px;
+    outline: none; padding: 0; caret-color: var(--hud);
+    transition: border-color .15s, background .15s;
+  }
+  .cell.digit { border-radius: 10px 10px 4px 4px; background: #ffffff; color: #111827; caret-color: #111827; }
+  .cell.letter { border-radius: 4px 4px 10px 10px; background: #fef08a; color: #713f12; caret-color: #713f12; }
+  .cell:focus { border-color: var(--hud); background: rgba(57,255,20,.12); }
+  .cell.digit:focus { background: #ffffff; }
+  .cell.letter:focus { background: #fef08a; }
+  .cell.empty { border-style: dashed; }
+  #cellHint { text-align: center; color: var(--muted); font-size: .76rem; margin-top: 8px; }
+  #cellHint[hidden] { display: none; }
+
+  .opt-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 14px; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="camVideo" playsinline autoplay muted></video>
+  <canvas id="view"></canvas>
+
+  <button type="button" class="fab" id="btnSwitch" hidden title="Cambiar cámara" aria-label="Cambiar cámara">⇄</button>
+  <button type="button" class="fab second" id="btnStream" hidden title="Pausar/reanudar escaneo automático" aria-label="Escaneo automático">◉</button>
+  <button type="button" class="fab third" id="btnPhoto" hidden title="Escanear una foto" aria-label="Escanear una foto">🖼</button>
+  <button type="button" class="fab third" id="btnBackCam" hidden title="Volver a la cámara" aria-label="Volver a la cámara">📷</button>
+  <button type="button" class="fab fourth" id="btnSettings" hidden title="Ajustes de umbral" aria-label="Ajustes">⚙</button>
+  <button type="button" class="fab fifth" id="btnTorch" hidden title="Linterna (mejora la lectura)" aria-label="Linterna" aria-pressed="false">🔦</button>
+  <button type="button" class="fab fifth" id="btnFlash" hidden title="Foto con flash (cámara nativa)" aria-label="Foto con flash">📸</button>
+  <button type="button" class="fab home" id="btnHome" hidden title="Salir al menú principal" aria-label="Menú principal">⌂</button>
+  <button type="button" id="btnShutter" hidden title="Reconocer y capturar matrícula" aria-label="Capturar y reconocer">📷</button>
+  <div id="levelWarn" hidden>📐 Mantenga la cámara nivelada</div>
+  <div id="scanFx" hidden></div>
+  <div id="focusRing" hidden></div>
+  <input type="file" id="photoInput" accept="image/*" hidden>
+  <input type="file" id="captureInput" accept="image/*" capture="environment" hidden>
+
+  <div id="settingsPanel" hidden>
+    <div class="sp-row">
+      <span class="sp-label">Umbral para aceptar</span>
+      <span class="sp-value" id="thresholdValue">80%</span>
+    </div>
+    <input type="range" id="thresholdSlider" min="50" max="95" step="1" value="80">
+    <div class="sp-row sp-sub">
+      <span>50%</span><span>95%</span>
+    </div>
+    <div class="sp-row" style="margin-top:12px">
+      <span class="sp-label">Auto-encuadre de la placa</span>
+      <label class="switch"><input type="checkbox" id="autoHudToggle"> 🎯</label>
+    </div>
+    <div class="sp-row" style="margin-top:12px">
+      <span class="sp-label">Solo matrículas españolas</span>
+      <label class="switch"><input type="checkbox" id="spainOnlyToggle" checked> 🇪🇸</label>
+    </div>
+  </div>
+
+  <div id="liveReadout" hidden>
+    <div class="lr-text" id="liveText">—</div>
+    <div class="lr-meta">
+      <span class="lr-conf" id="liveConf">—</span>
+      <span class="lr-dots" id="liveDots"></span>
+    </div>
+  </div>
+
+  <div id="hudClock" hidden>
+    <span id="clockTime">00:00:00.000</span>
+    <span id="clockFps" class="idle">— fps</span>
+  </div>
+
+  <div id="hint" hidden>1 dedo ↑/↓ zoom · 2 dedos ajustar recuadro · botón 📷 capturar · toque enfocar</div>
+  <div id="zoomPill" hidden>1.0×</div>
+
+  <div class="overlay" id="statusOverlay" hidden>
+    <div class="pill"><span class="spinner"></span><span id="statusText">Procesando…</span></div>
+  </div>
+
+  <div class="overlay" id="resultOverlay" hidden>
+    <div class="readout">
+      <div class="readout-top">
+        <span class="label">Lectura OCR</span>
+        <span class="badge" id="confBadge">—</span>
+      </div>
+      <div id="ocrText" contenteditable="true" spellcheck="false"
+           autocapitalize="characters" autocomplete="off" enterkeyhint="done"></div>
+      <div id="cellRow" hidden></div>
+      <div id="cellHint" hidden>Doble toque en una celda para vaciarla · toca y escribe para corregir un carácter</div>
+      <div class="actions">
+        <button type="button" class="cancel" id="btnCancel">Cancelar</button>
+        <button type="button" class="accept" id="btnAccept">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="startOverlay">
+    <div class="start-card">
+      <h1>Probador <span>OCR</span></h1>
+      <p>Encuadra la matrícula dentro del recuadro verde y pulsa el <b>botón de captura</b>. Desliza un dedo ↑/↓ para zoom, usa <b>dos dedos</b> para ajustar el recuadro y un toque para enfocar.</p>
+      <button type="button" class="primary" id="btnStart">Activar cámara</button>
+      <div class="row" style="display:flex;gap:10px;justify-content:center;margin-top:12px">
+        <button type="button" id="btnStartPhoto">Escanear una foto</button>
+      </div>
+      <div class="note" id="startNote" hidden></div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const endpoint = new URL("/api/ocr/scan", location.origin).toString();
+  const detectEndpoint = new URL("/api/ocr/detect", location.origin).toString();
+
+  const ASPECT = 520 / 110; // proporción aproximada de matrícula (mm)
+  const MAX_BYTES = 10 * 1024 * 1024;
+
+  const canvas = $("view");
+  const ctx = canvas.getContext("2d");
+  const camVideo = $("camVideo");
+  const btnStart = $("btnStart");
+  const btnSwitch = $("btnSwitch");
+  const btnAccept = $("btnAccept");
+  const btnCancel = $("btnCancel");
+  const ocrText = $("ocrText");
+  const confBadge = $("confBadge");
+  const resultOverlay = $("resultOverlay");
+  const statusOverlay = $("statusOverlay");
+  const statusText = $("statusText");
+  const startOverlay = $("startOverlay");
+  const hint = $("hint");
+  const toastEl = $("toast");
+  const zoomPill = $("zoomPill");
+  const btnStream = $("btnStream");
+  const btnPhoto = $("btnPhoto");
+  const btnBackCam = $("btnBackCam");
+  const photoInput = $("photoInput");
+  const btnStartPhoto = $("btnStartPhoto");
+  const btnSettings = $("btnSettings");
+  const settingsPanel = $("settingsPanel");
+  const thresholdSlider = $("thresholdSlider");
+  const thresholdValue = $("thresholdValue");
+  const btnTorch = $("btnTorch");
+  const btnFlash = $("btnFlash");
+  const captureInput = $("captureInput");
+  const autoHudToggle = $("autoHudToggle");
+  const spainOnlyToggle = $("spainOnlyToggle");
+  const liveReadout = $("liveReadout");
+  const liveText = $("liveText");
+  const liveConf = $("liveConf");
+  const liveDots = $("liveDots");
+  const hudClock = $("hudClock");
+  const clockTime = $("clockTime");
+  const clockFps = $("clockFps");
+  const cellRow = $("cellRow");
+  const cellHint = $("cellHint");
+  const btnShutter = $("btnShutter");
+  const btnHome = $("btnHome");
+  const levelWarn = $("levelWarn");
+  const scanFx = $("scanFx");
+  const focusRing = $("focusRing");
+
+  const filterSupported = "filter" in ctx;
+  const isSecure = window.isSecureContext || location.protocol === "https:";
+  const cameraSupported = !!navigator.mediaDevices?.getUserMedia;
+
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 5;
+  const ZOOM_PER_OCTAVE = 280; // px de deslizamiento para duplicar el zoom
+
+  const STREAM_INTERVAL = 800;    // ms entre lecturas del streaming
+  const DETECT_INTERVAL = 600;    // ms entre detecciones de la placa (auto-encuadre)
+  const THRESHOLD_KEY = "ocrThreshold";
+  const SPAIN_ONLY_KEY = "ocrSpainOnly";
+
+  // --- Captura cliente (recorte + densidad OCR) ---
+  const CLOCK_TICK = 47;          // refresco del reloj con milisegundos
+  const FPS_WINDOW = 8;           // respuestas usadas para estimar los fps del servidor
+  const OCR_CHAR_TARGET = 45;     // altura objetivo del carácter en el recorte (px)
+  const OCR_CHAR_RATIO = 0.5;     // alto de carácter ≈ mitad del alto del recuadro
+  const OCR_MAX_WIDTH = 1024;     // ancho máximo del recorte enviado
+  const JPEG_QUALITY = 0.85;      // calidad de la imagen enviada
+  const SHUTTER_DELAY_MS = 200;   // retraso tras el toque para estabilizar la mano
+  const LEVEL_MAX_DEG = 15;       // inclinación máxima (roll) tolerada
+
+  // Umbral para aceptar la lectura: ajustable desde la UI (por defecto 0.80)
+  let confirmThreshold = (() => {
+    const saved = Number(localStorage.getItem(THRESHOLD_KEY));
+    return Number.isFinite(saved) && saved >= 0.5 && saved <= 0.95 ? saved : 0.80;
+  })();
+
+  // Restricción a formato español: activada por defecto, persistente
+  let spainOnly = (() => {
+    const saved = localStorage.getItem(SPAIN_ONLY_KEY);
+    return saved === null ? true : saved === "1";
+  })();
+
+  // Refinamiento de foto estática (ensemble de variantes)
+  const REFINE_BUDGET_MS = 5000;  // tope de tiempo del refinamiento
+  const REFINE_CONCURRENCY = 2;   // peticiones simultáneas
+  const REFINE_EARLY_CONF = 0.90; // corta antes si 2 variantes coinciden con alta confianza
+  const VARIANTS = [
+    { name: "original",    filter: "grayscale(1) contrast(1.12) brightness(1.04)" },
+    { name: "invertida",   filter: "grayscale(1) invert(1) contrast(1.12) brightness(1.04)" },
+    { name: "contraste",   filter: "grayscale(1) contrast(1.6) brightness(1.1)" },
+    { name: "suave",       filter: "grayscale(1) contrast(0.85) brightness(1.08)" },
+    { name: "sinfiltro",   filter: "none" }
+  ];
+
+  let stream = null;
+  let raf = 0;
+  let live = false;
+  let facingMode = "environment";
+  let staticImage = null; // ImageBitmap de la foto cargada (modo foto)
+  let torchOn = false;    // linterna activa (si la cámara lo soporta)
+  let autoHud = false;    // auto-encuadre activo (por defecto off)
+  let autoHudHold = 0;    // timestamp hasta el que no se auto-encuadra (override manual)
+  let detectTimer = 0;    // bucle de detección de placa
+  let detectBusy = false;
+  let lastDetect = null;  // último candidato {x,y,w,h} normalizado
+  let hudTarget = null;   // destino de animación del recuadro { x, y, w, h } en pantalla
+  let map = null;   // mapeo vídeo -> canvas (cover, sin zoom)
+  let hud = null;   // recuadro guía en px CSS del canvas
+  let cw = 0, ch = 0;
+  let hintTimer = 0, toastTimer = 0, zoomTimer = 0;
+  let zoom = 1;
+  let hudSize = null;  // { w, h } del recuadro, ajustable con dos dedos
+  let hudPos = null;   // { x, y } de la esquina del recuadro, arrastrable
+  let gesture = null;  // gesto de un dedo: { id, mode, startY, ... }
+  let pinch = null;    // gesto de dos dedos: { spanX0, spanY0, w0, h0 }
+  let suppressTap = false;
+  const pointers = new Map(); // punteros activos para el gesto de dos dedos
+
+  let streaming = true;   // escaneo automático activo
+  let streamTimer = 0;    // id del setTimeout del bucle
+  let streamBusy = false; // hay una petición de streaming en vuelo
+
+  let clockTimer = 0;     // reloj con milisegundos
+  let busy = false;       // hay una captura o refinamiento en curso (bloquea reentradas)
+  let roll = 0;           // inclinación actual de la tablet (grados, DeviceOrientation)
+  let orientHandler = null;
+  let fxTimer = 0;        // duración de la animación de escaneo
+  const fpsSamples = [];  // timestamps de las últimas respuestas del servidor
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // Lienzo reutilizable: un único <canvas> fuera de pantalla que se reescribe en cada captura
+  const workCanvas = document.createElement("canvas");
+  const workCtx = workCanvas.getContext("2d");
+
+  // ---------- HUD: reloj con milisegundos + fps del servidor ----------
+  const pad = (n, len) => String(n).padStart(len, "0");
+  let lastResponseAt = 0; // marca de la última respuesta (para apagar los fps mostrados)
+  function tickClock() {
+    const d = new Date();
+    clockTime.textContent =
+      pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2) +
+      "." + pad(d.getMilliseconds(), 3);
+  }
+
+  function showHudClock(on) {
+    hudClock.hidden = !on;
+    clearInterval(clockTimer);
+    clockTimer = 0;
+    if (on) {
+      tickClock();
+      clockTimer = setInterval(() => { tickClock(); renderFps(); }, CLOCK_TICK);
+    }
+  }
+
+  // fps medidos por el cliente = tasa de respuestas completadas del bucle de procesamiento
+  function recordServerResponse() {
+    const now = performance.now();
+    fpsSamples.push(now);
+    if (fpsSamples.length > FPS_WINDOW) fpsSamples.shift();
+    lastResponseAt = now;
+    renderFps();
+  }
+
+  function renderFps() {
+    let text, idle;
+    if (performance.now() - lastResponseAt > 1500 || fpsSamples.length < 2) {
+      text = "— fps"; idle = true;
+    } else {
+      const span = (fpsSamples[fpsSamples.length - 1] - fpsSamples[0]) / 1000;
+      const fps = span > 0 ? (fpsSamples.length - 1) / span : 0;
+      text = fps.toFixed(1) + " fps"; idle = false;
+    }
+    if (clockFps.textContent !== text) clockFps.textContent = text;
+    clockFps.classList.toggle("idle", idle);
+  }
+
+  function resetFps() {
+    fpsSamples.length = 0;
+    lastResponseAt = 0;
+    renderFps();
+  }
+
+  // ---------- Aviso HTTPS ----------
+  if (!isSecure || !cameraSupported) {
+    const httpsUrl = "https://" + location.hostname + ":5443/";
+    const note = $("startNote");
+    note.innerHTML = `La cámara necesita un contexto seguro (HTTPS). Abre <a href="${httpsUrl}">${httpsUrl}</a> y acepta el aviso del certificado.`;
+    note.hidden = false;
+    btnStart.disabled = true;
+  }
+
+  // ---------- Layout a pantalla completa ----------
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cw = window.innerWidth;
+    ch = window.innerHeight;
+    canvas.width = Math.round(cw * dpr);
+    canvas.height = Math.round(ch * dpr);
+    canvas.style.width = cw + "px";
+    canvas.style.height = ch + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    updateMapping();
+    hud = getHud();
+    if (!live && map && staticImage) drawStatic(); // foto cargada: repinta
+  }
+
+  // Fuente activa: el vídeo en vivo o la foto cargada
+  function sourceEl() { return staticImage || camVideo; }
+  const isActive = () => live || !!staticImage; // interactivo: hay imagen que encuadrar
+  function sourceSize() {
+    if (staticImage) return { w: staticImage.width, h: staticImage.height };
+    return { w: camVideo.videoWidth, h: camVideo.videoHeight };
+  }
+
+  function updateMapping() {
+    const { w: vw, h: vh } = sourceSize();
+    if (!vw || !vh) { map = null; return; }
+    const scale = Math.max(cw / vw, ch / vh);
+    const dw = vw * scale, dh = vh * scale;
+    map = { vw, vh, scale, dw, dh, dx: (cw - dw) / 2, dy: (ch - dh) / 2 };
+  }
+
+  // Cover base + factor de zoom, recentrado en pantalla
+  function effMap() {
+    if (!map) return null;
+    const scale = map.scale * zoom;
+    const dw = map.vw * scale, dh = map.vh * scale;
+    return { vw: map.vw, vh: map.vh, scale, dw, dh, dx: (cw - dw) / 2, dy: (ch - dh) / 2 };
+  }
+
+  const MIN_HUD_W = 80;
+  const MIN_HUD_H = 28;
+  const HUD_PINCH_GAIN = 1.0; // el recuadro sigue la apertura de los dedos
+
+  function defaultHudSize() {
+    let bw = cw * 0.9;
+    let bh = bw / ASPECT;
+    if (bh > ch * 0.55) { bh = ch * 0.55; bw = bh * ASPECT; }
+    return { w: bw, h: bh };
+  }
+
+  // Tamaño del recuadro (persiste entre capturas; se acota al viewport)
+  function getHudSize() {
+    if (!hudSize) hudSize = defaultHudSize();
+    hudSize.w = clamp(hudSize.w, MIN_HUD_W, cw * 0.98);
+    hudSize.h = clamp(hudSize.h, MIN_HUD_H, ch * 0.98);
+    return hudSize;
+  }
+
+  // Posición de la esquina superior izquierda (por defecto centrado); acotada al viewport
+  function getHudPos() {
+    const s = getHudSize();
+    if (!hudPos) hudPos = { x: (cw - s.w) / 2, y: (ch - s.h) / 2 };
+    hudPos.x = clamp(hudPos.x, 0, Math.max(0, cw - s.w));
+    hudPos.y = clamp(hudPos.y, 0, Math.max(0, ch - s.h));
+    return hudPos;
+  }
+
+  function getHud() {
+    const s = getHudSize();
+    const p = getHudPos();
+    return { x: p.x, y: p.y, w: s.w, h: s.h };
+  }
+
+  // ---------- Dibujo ----------
+  function drawScene() {
+    if (!map) { updateMapping(); if (!map) return; }
+    const m = effMap();
+    if (!m) return;
+    const { dx, dy, dw, dh } = m;
+    hud = getHud();
+    const { x, y, w, h } = hud;
+
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.fillStyle = "#0b1220";
+    ctx.fillRect(0, 0, cw, ch);
+
+    // Imagen normal
+    ctx.drawImage(sourceEl(), dx, dy, dw, dh);
+
+    // Blanco y negro solo dentro del recuadro
+    if (filterSupported) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.filter = "grayscale(1) contrast(1.12) brightness(1.04)";
+      ctx.drawImage(sourceEl(), dx, dy, dw, dh);
+      ctx.restore();
+      ctx.filter = "none";
+    }
+
+    drawHud(x, y, w, h);
+  }
+
+  const isTilted = () => Math.abs(roll) > LEVEL_MAX_DEG;
+
+  function drawHud(x, y, w, h) {
+    const accent = isTilted() ? "#ef4444" : "#39ff14";
+
+    // Retícula de tercios
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.globalAlpha = 0.22;
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(x + (w * i) / 3, y);
+      ctx.lineTo(x + (w * i) / 3, y + h);
+      ctx.moveTo(x, y + (h * i) / 3);
+      ctx.lineTo(x + w, y + (h * i) / 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Línea de base central
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y + h / 2);
+    ctx.lineTo(x + w, y + h / 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // Marco + esquinas en escuadra con glow (rojo si la tablet está inclinada)
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 12;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    ctx.restore();
+
+    const len = Math.min(36, w * 0.2, h * 0.4);
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "square";
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 14;
+    const corners = [
+      [x, y, 1, 1], [x + w, y, -1, 1],
+      [x, y + h, 1, -1], [x + w, y + h, -1, -1]
+    ];
+    for (const [cx, cy, sx, sy] of corners) {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy + sy * len);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx + sx * len, cy);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function render() {
+    if (!live) return;
+    raf = requestAnimationFrame(render);
+    if (hudTarget) scheduleHudAnim();
+    drawScene();
+  }
+
+  // ---------- Toast / pista ----------
+  function toast(msg, kind) {
+    toastEl.textContent = msg;
+    toastEl.className = kind || "";
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; }, 2600);
+  }
+  function showHint() {
+    hint.hidden = false;
+    hint.classList.remove("hide");
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => hint.classList.add("hide"), 3500);
+  }
+
+  // ---------- Cámara ----------
+  async function startCamera() {
+    if (!cameraSupported) return;
+    await stopCamera();
+    staticImage = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false
+      });
+    } catch {
+      toast("No se pudo acceder a la cámara", "bad");
+      return;
+    }
+
+    camVideo.srcObject = stream;
+    try { await camVideo.play(); } catch { /* autoplay */ }
+
+    await new Promise((r) => {
+      if (camVideo.videoWidth) return r();
+      camVideo.onloadedmetadata = () => r();
+    });
+
+    startOverlay.hidden = true;
+    btnSwitch.hidden = false;
+    btnStream.hidden = false;
+    btnPhoto.hidden = false;
+    btnBackCam.hidden = true;
+    btnSettings.hidden = false;
+    btnHome.hidden = false;
+    btnShutter.hidden = false;
+    startLevelWatch();
+    // La linterna solo se ofrece si la cámara activa la soporta (Android/Chrome).
+    // Cuando no la soporta, ofrecemos foto con flash mediante la cámara nativa.
+    torchOn = false;
+    btnTorch.classList.remove("on");
+    btnTorch.setAttribute("aria-pressed", "false");
+    const canTorch = torchSupported();
+    btnTorch.hidden = !canTorch;
+    btnFlash.hidden = canTorch; // 📸 nativo: fallback de flash en iOS
+    hint.textContent = "Arrastra el recuadro · 1 dedo fuera ↑/↓ zoom · 2 dedos ajustar · toque enfocar · botón 📷 capturar";
+    resize();
+    live = true;
+    render();
+    showHint();
+    showHudClock(true);
+    applyFocus(); // enfoque continuo si la cámara lo soporta
+    setStreaming(streaming); // arranca/pausa el bucle según el estado del toggle
+    if (autoHud) scheduleDetect(0);
+  }
+
+  // ---------- Foto estática ----------
+  async function loadStaticImage(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast("El archivo no es una imagen", "bad"); return; }
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      toast("No se pudo decodificar la imagen", "bad");
+      return;
+    }
+
+    await stopCamera();
+    staticImage = bitmap;
+    hudSize = null;   // reinicia el recuadro al aspecto por defecto
+    hudPos = null;    // y lo recentra
+    zoom = 1;
+
+    startOverlay.hidden = true;
+    btnSwitch.hidden = true;
+    btnStream.hidden = true;
+    btnPhoto.hidden = true;
+    btnBackCam.hidden = false;
+    btnSettings.hidden = false;
+    btnHome.hidden = false;
+    btnShutter.hidden = false;
+    btnTorch.hidden = true;
+    btnFlash.hidden = true;
+    levelWarn.hidden = true;
+    liveReadout.hidden = true;
+    hint.textContent = "Arrastra el recuadro · 1 dedo fuera ↑/↓ zoom · 2 dedos ajustar · botón 📷 escanear";
+
+    resize();
+    drawStatic();
+    showHudClock(true);
+    renderReadout("Pulsa el botón 📷 para escanear la foto", null, 0, true);
+    liveReadout.hidden = false;
+    showHint();
+    // En modo foto sí conviene auto-encuadrar de una: la imagen no se mueve
+    if (autoHud) scheduleDetect(0);
+  }
+
+  function drawStatic() {
+    updateMapping();
+    drawScene();
+  }
+  // El dibujo en modo foto es bajo demanda (no hay vídeo que refrescar)
+  function resumeStatic() {
+    if (!staticImage) return;
+    live = false;
+    drawStatic();
+    renderReadout("Pulsa el botón 📷 para escanear la foto", null, 0, true);
+    liveReadout.hidden = false;
+  }
+
+  async function stopCamera() {
+    cancelAnimationFrame(raf);
+    raf = 0;
+    live = false;
+    gesture = null;
+    pinch = null;
+    pointers.clear();
+    suppressTap = false;
+    resetStream();
+    clearTimeout(detectTimer);
+    detectTimer = 0;
+    detectBusy = false;
+    lastDetect = null;
+    hudTarget = null;
+    resetFps();
+    stopLevelWatch();
+    showHudClock(false);
+    liveReadout.hidden = true;
+    btnStream.hidden = true;
+    btnTorch.hidden = true;
+    btnFlash.hidden = true;
+    btnShutter.hidden = true;
+    btnHome.hidden = true;
+    levelWarn.hidden = true;
+    torchOn = false;
+    if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    camVideo.srcObject = null;
+    map = null;
+  }
+
+  // ---------- Linterna (torch) ----------
+  function videoTrack() {
+    return stream ? stream.getVideoTracks()[0] ?? null : null;
+  }
+
+  function torchSupported() {
+    const track = videoTrack();
+    const caps = track?.getCapabilities?.();
+    return !!caps && "torch" in caps;
+  }
+
+  async function setTorch(on) {
+    const track = videoTrack();
+    if (!track || !torchSupported()) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+      torchOn = on;
+      btnTorch.classList.toggle("on", on);
+      btnTorch.setAttribute("aria-pressed", String(on));
+      return true;
+    } catch {
+      toast("La cámara no pudo cambiar la linterna", "bad");
+      return false;
+    }
+  }
+
+  btnTorch.addEventListener("click", () => setTorch(!torchOn));
+
+  // ---------- Nivel (DeviceOrientationEvent) ----------
+  // Detecta la inclinación lateral (roll/beta) de la tablet. Si supera LEVEL_MAX_DEG,
+  // el marco se pinta en rojo y se muestra el aviso "Mantenga la cámara nivelada".
+  function onOrientation(e) {
+    let deg;
+    if (typeof e.beta === "number" && typeof e.gamma === "number") {
+      // Ángulo entre la pantalla y el plano horizontal. Mirando la cámara en horizontal
+      // la tablet está vertical; |gamma|≈90 → nivelada; muy por debajo → inclinada.
+      deg = 90 - Math.max(Math.abs(e.beta), Math.abs(e.gamma));
+    } else if (typeof e.alpha === "number") {
+      deg = ((e.alpha + 180) % 360) - 180;
+    } else {
+      return;
+    }
+    roll = deg;
+    const tilted = isTilted();
+    levelWarn.hidden = !tilted;
+    if (live) drawScene(); // refresca el color del marco de inmediato
+  }
+
+  function startLevelWatch() {
+    if (orientHandler || !("DeviceOrientationEvent" in window)) return;
+    const begin = () => {
+      if (orientHandler) return;
+      orientHandler = onOrientation;
+      window.addEventListener("deviceorientation", orientHandler, true);
+    };
+    // iOS 13+ exige permiso explícito (debe pedirse desde un gesto del usuario)
+    const DOE = window.DeviceOrientationEvent;
+    if (DOE && typeof DOE.requestPermission === "function") {
+      DOE.requestPermission().then((state) => { if (state === "granted") begin(); }).catch(() => { /* denegado */ });
+    } else {
+      begin();
+    }
+  }
+
+  function stopLevelWatch() {
+    if (!orientHandler) return;
+    window.removeEventListener("deviceorientation", orientHandler, true);
+    orientHandler = null;
+    roll = 0;
+  }
+
+  // ---------- Animación de escaneo sobre el recuadro ----------
+  function flashScan() {
+    const g = getHud();
+    scanFx.style.left = g.x + "px";
+    scanFx.style.top = g.y + "px";
+    scanFx.style.width = g.w + "px";
+    scanFx.style.height = g.h + "px";
+    scanFx.hidden = false;
+    scanFx.classList.add("on");
+    clearTimeout(fxTimer);
+    fxTimer = setTimeout(() => { scanFx.classList.remove("on"); scanFx.hidden = true; }, 420);
+  }
+
+  // Círculo de foco en el punto pulsado (feedback del tap-on-focus)
+  function showFocusRing(x, y) {
+    focusRing.style.left = x + "px";
+    focusRing.style.top = y + "px";
+    focusRing.hidden = false;
+    clearTimeout(focusRing._t);
+    focusRing._t = setTimeout(() => { focusRing.hidden = true; }, 500);
+  }
+
+  // Enfoque continuo (cámaras que lo soportan)
+  async function applyFocus() {
+    const track = videoTrack();
+    const caps = track?.getCapabilities?.();
+    if (!track || !caps || !("focusMode" in caps)) return false;
+    const modes = caps.focusMode || [];
+    if (!modes.includes("continuous")) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ---------- Menú principal ----------
+  function goHome() {
+    closeResult();
+    stopCamera();
+    staticImage = null;
+    startOverlay.hidden = false;
+    btnHome.hidden = true;
+    toast("Menú principal");
+  }
+
+  btnHome.addEventListener("click", goHome);
+  btnShutter.addEventListener("click", () => captureAndScan());
+
+  // ---------- Elección del circuito al arrancar ----------
+  btnStart.addEventListener("click", startCamera);
+  btnSwitch.addEventListener("click", async () => {
+    facingMode = facingMode === "environment" ? "user" : "environment";
+    await startCamera();
+  });
+
+  // ---------- Foto estática (listeners) ----------
+  const openPhotoPicker = () => { photoInput.value = ""; photoInput.click(); };
+  btnStartPhoto.addEventListener("click", openPhotoPicker);
+  btnPhoto.addEventListener("click", openPhotoPicker);
+  photoInput.addEventListener("change", () => loadStaticImage(photoInput.files[0]));
+  btnBackCam.addEventListener("click", () => startCamera());
+
+  // ---------- Ajustes: umbral de aceptación ----------
+  function applyThreshold(pct) {
+    confirmThreshold = clamp(pct / 100, 0.5, 0.95);
+    thresholdValue.textContent = Math.round(confirmThreshold * 100) + "%";
+    try { localStorage.setItem(THRESHOLD_KEY, String(confirmThreshold)); } catch { /* noop */ }
+  }
+
+  thresholdSlider.value = Math.round(confirmThreshold * 100);
+  thresholdValue.textContent = Math.round(confirmThreshold * 100) + "%";
+  thresholdSlider.addEventListener("input", () => applyThreshold(Number(thresholdSlider.value)));
+  btnSettings.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
+
+  // ---------- Ajustes: modo España / internacional ----------
+  spainOnlyToggle.checked = spainOnly;
+  spainOnlyToggle.addEventListener("change", () => {
+    spainOnly = spainOnlyToggle.checked;
+    try { localStorage.setItem(SPAIN_ONLY_KEY, spainOnly ? "1" : "0"); } catch { /* noop */ }
+  });
+
+  // Foto con flash nativo (cámara del sistema, con su propio flash) para iOS sin torch
+  btnFlash.addEventListener("click", () => { captureInput.value = ""; captureInput.click(); });
+  captureInput.addEventListener("change", () => loadStaticImage(captureInput.files[0]));
+
+  document.addEventListener("pointerdown", (e) => {
+    if (!settingsPanel.hidden && !settingsPanel.contains(e.target) && e.target !== btnSettings) {
+      settingsPanel.hidden = true;
+    }
+  }, true);
+
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", () => setTimeout(resize, 150));
+
+  // Arranque automático si ya hay permiso
+  if (cameraSupported && isSecure) {
+    navigator.permissions?.query({ name: "camera" })
+      .then((p) => { if (p.state === "granted") startCamera(); })
+      .catch(() => { /* sin API de permisos */ });
+  }
+
+  // ---------- Gestos ----------
+  //  1 dedo dentro del recuadro -> moverlo      |  1 dedo fuera -> zoom
+  //  2 dedos -> ajustar ancho/alto               |  toque -> enfocar (tap-on-focus)
+  function showPill(text) {
+    zoomPill.textContent = text;
+    zoomPill.hidden = false;
+    zoomPill.classList.remove("hide");
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => zoomPill.classList.add("hide"), 800);
+  }
+
+  const activePointers = () => [...pointers.values()];
+  const insideHud = (x, y) => {
+    const g = getHud();
+    return x >= g.x && x <= g.x + g.w && y >= g.y && y <= g.y + g.h;
+  };
+
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (!isActive()) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
+
+    if (pointers.size === 1) {
+      const p = getHudPos();
+      gesture = insideHud(e.clientX, e.clientY)
+        ? { id: e.pointerId, mode: "move", startX: e.clientX, startY: e.clientY, x0: p.x, y0: p.y, moved: false }
+        : { id: e.pointerId, mode: "zoom", startY: e.clientY, startZoom: zoom, moved: false };
+      hudTarget = null; // el operario toma el control: cancela animación en curso
+    } else if (pointers.size === 2 && !pinch) {
+      const [a, b] = activePointers();
+      pinch = {
+        spanX0: Math.abs(a.x - b.x),
+        spanY0: Math.abs(a.y - b.y),
+        w0: getHudSize().w,
+        h0: getHudSize().h
+      };
+      gesture = null;      // cancela el gesto iniciado con el primer dedo
+      suppressTap = true;  // un pinch nunca es un toque
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!isActive()) return;
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pinch && pointers.size >= 2) {
+      e.preventDefault();
+      autoHudHold = performance.now() + 4000; // el operario ajusta: pausa el auto-encuadre
+      const [a, b] = activePointers();
+      const spanX = Math.abs(a.x - b.x);
+      const spanY = Math.abs(a.y - b.y);
+      const s = getHudSize();
+      s.w = clamp(pinch.w0 + (spanX - pinch.spanX0) * HUD_PINCH_GAIN, MIN_HUD_W, cw * 0.98);
+      s.h = clamp(pinch.h0 + (spanY - pinch.spanY0) * HUD_PINCH_GAIN, MIN_HUD_H, ch * 0.98);
+
+      showPill(Math.round(s.w) + "×" + Math.round(s.h));
+      if (staticImage) drawStatic();
+      return;
+    }
+
+    if (!gesture || e.pointerId !== gesture.id) return;
+    e.preventDefault();
+
+    if (gesture.mode === "move") {
+      const dx = e.clientX - gesture.startX;
+      const dy = e.clientY - gesture.startY;
+      if (!gesture.moved && Math.hypot(dx, dy) > 8) gesture.moved = true;
+      if (!gesture.moved) return;
+      autoHudHold = performance.now() + 4000;
+      hudPos = { x: gesture.x0 + dx, y: gesture.y0 + dy };
+      getHudPos(); // acota al viewport
+
+      if (staticImage) drawStatic();
+      return;
+    }
+
+    const delta = gesture.startY - e.clientY; // deslizar hacia arriba = positivo
+    if (!gesture.moved && Math.abs(delta) > 10) gesture.moved = true;
+    if (!gesture.moved) return;
+
+    zoom = clamp(gesture.startZoom * Math.pow(2, delta / ZOOM_PER_OCTAVE), MIN_ZOOM, MAX_ZOOM);
+    autoHudHold = performance.now() + 4000;
+
+    showPill(zoom.toFixed(1) + "×");
+    if (staticImage) drawStatic();
+  });
+
+  function releasePointer(e) {
+    pointers.delete(e.pointerId);
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+    if (pointers.size < 2) pinch = null;
+  }
+
+  canvas.addEventListener("pointerup", (e) => {
+    const wasDrag = gesture?.id === e.pointerId && gesture.moved === true;
+    const wasPinch = suppressTap;
+    if (gesture?.id === e.pointerId) gesture = null;
+    releasePointer(e);
+
+    if (pointers.size === 0) suppressTap = false;
+    if (!isActive() || wasDrag || wasPinch) return; // swipe o pinch: no cuentan como toque
+
+    // tap-on-focus: un toque simple enfoca (feedback visual) en lugar de capturar
+    applyFocus();
+    showFocusRing(e.clientX, e.clientY);
+  });
+
+  canvas.addEventListener("pointercancel", (e) => {
+    if (gesture?.id === e.pointerId) gesture = null;
+    releasePointer(e);
+    if (pointers.size === 0) suppressTap = false;
+  });
+
+  // ---------- Streaming OCR (lectura periódica + auto-confirmación) ----------
+  const normalize = (t) => (t || "").replace(/\s+/g, " ").trim().toUpperCase();
+  const confClass = (c) => (c >= confirmThreshold ? "ok" : c >= 0.5 ? "warn" : "err");
+
+  function renderReadout(text, conf, count, dim, valid) {
+    liveText.textContent = (text && text.trim()) || "—";
+    liveConf.textContent = conf != null ? (conf * 100).toFixed(1) + "%" : "—";
+    // Muestra el veredicto de formato cuando lo hay; sin puntos de estabilidad (ya no auto-confirma)
+    liveDots.textContent = valid === true ? "✓" : valid === false ? "✗" : "";
+    liveReadout.className = dim ? "dim" : confClass(conf ?? 0);
+    liveReadout.hidden = false;
+  }
+
+  function resetStream() {
+    clearTimeout(streamTimer);
+    streamTimer = 0;
+    streamBusy = false;
+  }
+
+  function scheduleStream(delay = STREAM_INTERVAL) {
+    clearTimeout(streamTimer);
+    streamTimer = setTimeout(streamTick, delay);
+  }
+
+  // El bucle se auto-reagenda; las guardas saltan el tick sin solaparse
+  function streamTick() {
+    if (!streaming || !live || streamBusy || pinch || gesture?.moved) {
+      if (streaming && live) scheduleStream(); // congelado/pausado: no reagendar
+      return;
+    }
+    if (document.visibilityState !== "visible" || !resultOverlay.hidden) {
+      scheduleStream();
+      return;
+    }
+
+    streamBusy = true;
+    captureHudBlob()
+      .then((blob) => {
+        const form = new FormData();
+        form.append("file", blob, "stream.jpg");
+        return fetch(endpoint + "?spainOnly=" + (spainOnly ? "true" : "false"), { method: "POST", body: form });
+      })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("HTTP " + res.status))))
+      .then((data) => onStreamResult(data))
+      .catch(() => {
+  
+        renderReadout("", null, 0, true); // fallo silencioso: atenuado, sin toasts
+      })
+      .finally(() => {
+        streamBusy = false;
+        if (streaming && live) scheduleStream();
+      });
+  }
+
+  function onStreamResult(data) {
+    if (!live || !resultOverlay.hidden) return; // captura manual en curso
+    recordServerResponse();
+    const text = data?.text ?? "";
+    const conf = Number(data?.confidence ?? 0);
+    const norm = normalize(text);
+    // Solo mostramos la lectura en vivo; la confirmación es manual con el botón de captura
+    renderReadout(text, conf, 0, false, data?.valid);
+
+    // Auto-encuadre: si hay bbox y una lectura con texto, imantar el recuadro.
+    if (norm.length > 0 && data?.bbox && autoHud && performance.now() > autoHudHold) {
+      snapHudToBbox(data.bbox);
+    }
+  }
+
+  function setStreaming(on) {
+    streaming = on;
+    btnStream.classList.toggle("off", !on);
+    btnStream.textContent = on ? "◉" : "○";
+    btnStream.title = "Pausar/reanudar lectura en vivo";
+
+    resetStream();
+    if (on && live) {
+      renderReadout("", null, 0, true);
+      scheduleStream(0);
+    } else {
+      liveReadout.hidden = true;
+    }
+  }
+
+  btnStream.addEventListener("click", () => setStreaming(!streaming));
+
+  // ---------- Auto-encuadre (detección de placa + bbox de Tesseract) ----------
+  // Captura el frame completo reducido para el detector del servidor
+  function captureFrameBlob() {
+    const el = sourceEl();
+    const { w, h } = sourceSize();
+    if (!w || !h) return Promise.reject(new Error("Fuente no lista"));
+    const ratio = Math.min(1, 480 / w);
+    workCanvas.width = Math.max(1, Math.round(w * ratio));
+    workCanvas.height = Math.max(1, Math.round(h * ratio));
+    workCtx.drawImage(el, 0, 0, workCanvas.width, workCanvas.height);
+    return new Promise((resolve, reject) =>
+      workCanvas.toBlob((b) => b ? resolve(b) : reject(new Error("No se pudo capturar")), "image/jpeg", 0.7));
+  }
+
+  // Convierte un bbox en píxeles del recorte enviado a un rect en pantalla
+  function bboxToScreen(bbox) {
+    const m = effMap();
+    if (!m) return null;
+    const { scale, dx, dy, vw, vh } = m;
+    const g = getHud();
+    // origen del recorte en píxeles de vídeo
+    const ox = clamp((g.x - dx) / scale, 0, vw);
+    const oy = clamp((g.y - dy) / scale, 0, vh);
+    const x = dx + (ox + bbox.x) * scale;
+    const y = dy + (oy + bbox.y) * scale;
+    const w = bbox.width * scale;
+    const h = bbox.height * scale;
+    return { x, y, w, h };
+  }
+
+  // Imanta el recuadro al texto detectado con un pequeño margen
+  function snapHudToBbox(bbox) {
+    const r = bboxToScreen(bbox);
+    if (!r) return;
+    const g = getHud();
+    // Descartamos bboxes poco creíbles (demasiado pequeños o que cubren casi todo)
+    if (r.w < g.w * 0.15 || r.w > g.w * 0.98 || r.h > g.h * 0.98) return;
+    const marginX = r.w * 0.12, marginY = r.h * 0.25;
+    const target = {
+      w: clamp(r.w + marginX * 2, MIN_HUD_W, cw * 0.98),
+      h: clamp(r.h + marginY * 2, MIN_HUD_H, ch * 0.98),
+      x: r.x - marginX,
+      y: r.y - marginY
+    };
+    target.x = clamp(target.x, 0, Math.max(0, cw - target.w));
+    target.y = clamp(target.y, 0, Math.max(0, ch - target.h));
+
+    // Histéresis: si el destino está prácticamente donde ya está, no re-animar
+    const cur = getHud(), curP = getHudPos();
+    const delta = Math.abs(target.x - curP.x) + Math.abs(target.y - curP.y) +
+                  Math.abs(target.w - cur.w) + Math.abs(target.h - cur.h);
+    if (delta < 12) return;
+
+    hudTarget = target;
+    if (staticImage) applyHudTarget(); else scheduleHudAnim();
+  }
+
+  // Animación suave del recuadro hacia el destino
+  function applyHudTarget() {
+    if (!hudTarget) return;
+    const s = getHudSize(), p = getHudPos();
+    hudSize = { w: hudTarget.w, h: hudTarget.h };
+    hudPos = { x: hudTarget.x, y: hudTarget.y };
+    hudTarget = null;
+    if (staticImage) drawStatic();
+  }
+
+  function scheduleHudAnim() {
+    if (!hudTarget || !live) return;
+    const s = getHudSize(), p = getHudPos();
+    const t = hudTarget;
+    const k = 0.25; // suavizado
+    hudSize = { w: s.w + (t.w - s.w) * k, h: s.h + (t.h - s.h) * k };
+    hudPos = { x: p.x + (t.x - p.x) * k, y: p.y + (t.y - p.y) * k };
+    if (Math.abs(t.w - hudSize.w) < 1 && Math.abs(t.x - hudPos.x) < 1) applyHudTarget();
+  }
+
+  // Detección periódica de la placa (blob brillante) para auto-colocar el recuadro
+  function scheduleDetect(delay = DETECT_INTERVAL) {
+    clearTimeout(detectTimer);
+    detectTimer = setTimeout(detectTick, delay);
+  }
+
+  function detectTick() {
+    if (!autoHud || !isActive() || detectBusy || busy) { if (autoHud) scheduleDetect(); return; }
+    if (document.visibilityState !== "visible" || !resultOverlay.hidden) { scheduleDetect(); return; }
+
+    detectBusy = true;
+    captureFrameBlob()
+      .then((blob) => {
+        const form = new FormData();
+        form.append("file", blob, "frame.jpg");
+        return fetch(detectEndpoint, { method: "POST", body: form });
+      })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("HTTP " + res.status))))
+      .then((data) => onDetectResult(data))
+      .catch(() => { /* detección silenciosa */ })
+      .finally(() => {
+        detectBusy = false;
+        if (autoHud && isActive()) scheduleDetect();
+      });
+  }
+
+  function onDetectResult(data) {
+    if (!data?.found || !data.rect) { lastDetect = null; return; }
+    const r = data.rect;
+    // Estabilidad: exige solapamiento con la detección ANTERIOR (antes de sobrescribirla)
+    const stableDetect = lastDetect && iou(lastDetect, r) > 0.6;
+    lastDetect = r;
+
+    // No movemos el recuadro si el operario lo acaba de ajustar o está gesturando
+    if (!stableDetect || performance.now() < autoHudHold || pinch || gesture?.moved) return;
+    snapNormalizedRectToHud(r);
+  }
+
+  function iou(a, b) {
+    const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    const inter = ix * iy;
+    const union = a.w * a.h + b.w * b.h - inter;
+    return union > 0 ? inter / union : 0;
+  }
+
+  // rect normalizado (frame) -> rect en pantalla, con margen
+  function snapNormalizedRectToHud(r) {
+    const m = effMap();
+    if (!m) return;
+    const x = m.dx + r.x * m.dw;
+    const y = m.dy + r.y * m.dh;
+    const w = r.w * m.dw;
+    const h = r.h * m.dh;
+    if (w < 60 || h < 20) return;
+    const mx = w * 0.10, my = h * 0.22;
+    const target = {
+      w: clamp(w + mx * 2, MIN_HUD_W, cw * 0.98),
+      h: clamp(h + my * 2, MIN_HUD_H, ch * 0.98),
+      x: clamp(x - mx, 0, cw),
+      y: clamp(y - my, 0, ch)
+    };
+    target.x = clamp(target.x, 0, Math.max(0, cw - target.w));
+    target.y = clamp(target.y, 0, Math.max(0, ch - target.h));
+
+    // Histéresis: si el destino está prácticamente donde ya está, no re-animar
+    const cur = getHud(), curP = getHudPos();
+    const delta = Math.abs(target.x - curP.x) + Math.abs(target.y - curP.y) +
+                  Math.abs(target.w - cur.w) + Math.abs(target.h - cur.h);
+    if (delta < 12) return;
+
+    hudTarget = target;
+    if (staticImage) applyHudTarget(); else scheduleHudAnim();
+  }
+
+  autoHudToggle.addEventListener("change", () => {
+    autoHud = autoHudToggle.checked;
+    clearTimeout(detectTimer);
+    lastDetect = null;
+    if (autoHud && isActive()) scheduleDetect(0);
+  });
+
+  // ---------- Captura + OCR ----------
+  // Recorte del recuadro -> canvas reutilizable con la densidad adecuada para el OCR.
+  // Devuelve un Blob JPEG (0.85). variant: { filter } para el ensemble de foto estática.
+  function captureHudBlob(variant) {
+    const m = effMap();
+    if (!m) return Promise.reject(new Error("Fuente no lista"));
+    const { vw, vh, scale, dx, dy } = m;
+    const g = hud || getHud();
+    const sx = clamp((g.x - dx) / scale, 0, vw);
+    const sy = clamp((g.y - dy) / scale, 0, vh);
+    const sw = clamp(g.w / scale, 1, vw - sx);
+    const sh = clamp(g.h / scale, 1, vh - sy);
+
+    // Densidad OCR: escalar el recorte para que el carácter ronde OCR_CHAR_TARGET px de alto.
+    // (Alto de carácter ≈ mitad del recorte.) Ancho resultante acotado a OCR_MAX_WIDTH.
+    const charPx = sh * OCR_CHAR_RATIO;
+    let s = clamp(OCR_CHAR_TARGET / charPx, 0.3, 3.0);
+    let outW = sw * s, outH = sh * s;
+    if (outW > OCR_MAX_WIDTH) {
+      const k = OCR_MAX_WIDTH / outW;
+      s *= k; outW *= k; outH *= k;
+    }
+    outW = Math.max(1, Math.round(outW));
+    outH = Math.max(1, Math.round(outH));
+
+    workCanvas.width = outW;
+    workCanvas.height = outH;
+    const cx = workCtx;
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.filter = "none";
+    cx.imageSmoothingEnabled = true;
+    cx.imageSmoothingQuality = "high";
+    if (variant?.filter && "filter" in cx) cx.filter = variant.filter;
+    cx.drawImage(sourceEl(), sx, sy, sw, sh, 0, 0, outW, outH);
+    cx.filter = "none";
+    return new Promise((resolve, reject) =>
+      workCanvas.toBlob((b) => b ? resolve(b) : reject(new Error("No se pudo capturar")), "image/jpeg", JPEG_QUALITY));
+  }
+
+  async function postOcr(blob, name) {
+    const form = new FormData();
+    form.append("file", blob, name || "captura.png");
+    const res = await fetch(endpoint + "?spainOnly=" + (spainOnly ? "true" : "false"), { method: "POST", body: form });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        detail = body.detail || body.title || body || detail;
+      } catch { /* no JSON */ }
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return res.json();
+  }
+
+  async function captureAndScan() {
+    if (busy || !isActive()) return;
+    if (!statusOverlay.hidden || !resultOverlay.hidden) return; // ya hay una captura en curso
+    busy = true;
+    btnShutter.classList.add("busy");
+    btnShutter.disabled = true;
+
+    // Linterna: se fuerza durante la captura para congelar con el flash
+    const torchWasOn = torchOn;
+    if (torchSupported() && !torchOn) setTorch(true);
+    // Pequeño retraso para que el usuario estabilice la mano antes de congelar
+    await sleep(SHUTTER_DELAY_MS);
+    flashScan(); // animación breve de escaneo sobre el recuadro
+
+    // Congelar la imagen
+    cancelAnimationFrame(raf);
+    raf = 0;
+    live = false;
+    hint.classList.add("hide");
+
+    const started = performance.now();
+
+    try {
+      // Modo foto estática: ensemble de variantes con tope de 5 s
+      if (staticImage) {
+        statusText.textContent = "Refinando lectura… 0/" + VARIANTS.length;
+        statusOverlay.hidden = false;
+        try {
+          const best = await refineStatic();
+          statusOverlay.hidden = true;
+          if (!best) { toast("No se detectó texto", "bad"); resumeStatic(); return; }
+          showResult({ text: best.text, normalized: best.normalized, repaired: best.repaired, confidence: best.conf, valid: best.valid }, ((performance.now() - started) / 1000).toFixed(2));
+        } catch (err) {
+          statusOverlay.hidden = true;
+          toast("Error al escanear: " + (err?.message || err), "bad");
+          resumeStatic();
+        }
+        return;
+      }
+
+      // Modo en vivo: captura única del recorte
+      statusText.textContent = "Capturando…";
+      statusOverlay.hidden = false;
+      const blob = await captureHudBlob();
+      if (blob.size > MAX_BYTES) throw new Error("La captura supera los 10 MB");
+
+      statusText.textContent = "Reconociendo texto…";
+      const data = await postOcr(blob, "captura.jpg");
+      showResult(data, ((performance.now() - started) / 1000).toFixed(2));
+    } catch (err) {
+      toast("Error al escanear: " + (err?.message || err), "bad");
+      resumeLive();
+    } finally {
+      statusOverlay.hidden = true;
+      if (torchSupported() && !torchWasOn) setTorch(false);
+      busy = false;
+      btnShutter.classList.remove("busy");
+      btnShutter.disabled = false;
+    }
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Envía las variantes con concurrencia limitada y tope de tiempo; devuelve la mejor
+  async function refineStatic() {
+    const deadline = performance.now() + REFINE_BUDGET_MS;
+    const results = [];
+    let done = 0;
+
+    const runVariant = async (variant) => {
+      if (performance.now() >= deadline) return;
+      try {
+        const blob = await captureHudBlob(variant);
+        if (blob.size > MAX_BYTES) return;
+        const data = await postOcr(blob, variant.name + ".jpg");
+        results.push({
+          text: data?.text ?? "",
+          normalized: data?.normalized ?? "",
+          repaired: data?.repaired === true,
+          conf: Number(data?.confidence ?? 0),
+          valid: data?.valid === true,
+          variant: variant.name
+        });
+      } catch { /* variante descartada */ }
+      done++;
+      statusText.textContent = `Refinando lectura… ${done}/${VARIANTS.length}`;
+    };
+
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(REFINE_CONCURRENCY, VARIANTS.length) }, async () => {
+      while (idx < VARIANTS.length) {
+        if (performance.now() >= deadline) return;
+        if (results.length && scoreResults(results)?.stable) return; // consenso temprano
+        await runVariant(VARIANTS[idx++]);
+      }
+    });
+    await Promise.all(workers);
+
+    return scoreResults(results);
+  }
+
+  // Puntúa las variantes: prioriza consenso y formato de matrícula válido, luego confianza
+  function scoreResults(results) {
+    const groups = new Map();
+    for (const r of results) {
+      const norm = normalize(r.normalized || r.text);
+      if (!norm) continue;
+      const g = groups.get(norm) || { norm, text: r.text, normalized: r.normalized, repaired: false, count: 0, confSum: 0, confMax: 0, validCount: 0 };
+      g.count++;
+      g.confSum += r.conf;
+      g.confMax = Math.max(g.confMax, r.conf);
+      if (r.valid) g.validCount++;
+      if (r.repaired) g.repaired = true;
+      if ((r.normalized || "").length > (g.normalized || "").length) {
+        g.normalized = r.normalized; // conserva la variante más informativa
+        g.text = r.text;
+      }
+      groups.set(norm, g);
+    }
+    if (groups.size === 0) return null;
+
+    let best = null;
+    for (const g of groups.values()) {
+      const conf = g.confSum / g.count;
+      // Bonus por consenso y por ser una matrícula con formato válido
+      const validBonus = g.validCount > 0 ? 1.25 : 1.0;
+      g.score = conf * (1 + 0.15 * (g.count - 1)) * validBonus;
+      g.best = {
+        text: g.text,
+        normalized: g.normalized,
+        repaired: g.repaired,
+        conf: g.confMax,
+        reps: g.count,
+        valid: g.validCount > 0,
+        stable: g.count >= 2 && g.confMax >= REFINE_EARLY_CONF
+      };
+      if (!best || g.score > best.score) best = g;
+    }
+    return best.best;
+  }
+
+  // ---------- Resultado editable ----------
+  function showResult(data, elapsed) {
+    const text = data?.text ?? "";
+    const conf = Number(data?.confidence ?? 0);
+    const pct = Math.max(0, Math.min(100, conf * 100));
+
+    confBadge.className = "badge " + confClass(conf);
+    const formatMark = data?.valid === true ? " · ✔ matrícula"
+      : data?.valid === false ? " · ✗ formato" : "";
+    confBadge.textContent = `Confianza ${pct.toFixed(1)}%${elapsed ? " · " + elapsed + "s" : ""}${formatMark}`;
+
+    // 🇪🇸: 4 dígitos + 3 letras en celdas (blanco/amarillo). General: texto completo editable
+    if (spainOnly) {
+      buildCells(data?.normalized ?? "");
+    } else {
+      buildFreeText(data?.text ?? data?.normalized ?? "");
+    }
+    if (data?.repaired) toast("Lectura ajustada · ruido lateral descartado");
+    resultOverlay.hidden = false;
+  }
+
+  // ---------- Resultado en celdas (solo matrículas españolas) ----------
+  // Exactamente 4 celdas de dígitos (fondo blanco) + 3 de letras (amarillo claro),
+  // en dos filas apiladas. Doble toque vacía la celda; escribir corrige el carácter.
+  function buildCells(normalized) {
+    ocrText.hidden = true;
+    cellRow.hidden = false;
+    cellHint.hidden = false;
+    cellRow.innerHTML = "";
+
+    const chars = [...String(normalized ?? "")].filter((c) => /[A-Z0-9]/.test(c));
+    const digits = chars.filter((c) => /[0-9]/.test(c)).join("").slice(0, 4);
+    const letters = chars.filter((c) => /[A-Z]/.test(c)).join("").slice(0, 3);
+
+    let index = 0;
+    const makeCell = (ch, type) => {
+      const i = index++;
+      const cell = document.createElement("input");
+      cell.type = "text";
+      cell.className = "cell " + type;
+      cell.maxLength = 1;
+      cell.autocomplete = "off";
+      cell.spellcheck = false;
+      cell.inputMode = type === "digit" ? "numeric" : "text";
+      cell.autocapitalize = "characters";
+      cell.value = ch;
+      cell.addEventListener("input", () => onCellInput(cell, i));
+      cell.addEventListener("keydown", (e) => onCellKeydown(e, cell, i));
+      cell.addEventListener("dblclick", (e) => { e.preventDefault(); clearCell(cell); });
+      let lastTap = 0;
+      cell.addEventListener("touchend", (e) => {
+        const now = performance.now();
+        if (now - lastTap < 320) { e.preventDefault(); clearCell(cell); }
+        lastTap = now;
+      }, { passive: false });
+      return cell;
+    };
+
+    const rowDigits = document.createElement("div");
+    rowDigits.className = "cellGroup";
+    for (const ch of digits) rowDigits.appendChild(makeCell(ch, "digit"));
+    while (rowDigits.children.length < 4) {
+      const c = makeCell("", "digit");
+      c.classList.add("empty");
+      rowDigits.appendChild(c);
+    }
+
+    const rowLetters = document.createElement("div");
+    rowLetters.className = "cellGroup";
+    for (const ch of letters) rowLetters.appendChild(makeCell(ch, "letter"));
+    while (rowLetters.children.length < 3) {
+      const c = makeCell("", "letter");
+      c.classList.add("empty");
+      rowLetters.appendChild(c);
+    }
+
+    cellRow.appendChild(rowDigits);
+    cellRow.appendChild(rowLetters);
+
+    requestAnimationFrame(() => cellRow.querySelector(".cell")?.focus());
+  }
+
+  // ---------- Resultado en texto libre (modo general/internacional) ----------
+  // Todo el texto capturado en un único input editable.
+  function buildFreeText(text) {
+    clearCells();
+    ocrText.hidden = false;
+    ocrText.textContent = String(text ?? "");
+    requestAnimationFrame(() => {
+      ocrText.focus();
+      const range = document.createRange();
+      range.selectNodeContents(ocrText);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+  }
+
+  function clearCell(cell) {
+    cell.value = "";
+    cell.classList.add("empty");
+    updateCellsState();
+  }
+
+  function onCellInput(cell, index) {
+    const clean = cell.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(-1);
+    cell.value = clean;
+    cell.classList.toggle("empty", !clean);
+    updateCellsState();
+    // Auto-avance al rellenar
+    if (clean) {
+      const next = cellRow.querySelectorAll(".cell")[index + 1];
+      if (next) next.focus();
+    }
+  }
+
+  function onCellKeydown(e, cell, index) {
+    if (e.key === "Enter") { e.preventDefault(); btnAccept.click(); return; }
+    if (e.key === "Escape") { e.preventDefault(); btnCancel.click(); return; }
+    if (e.key === "Backspace" && !cell.value) {
+      const prev = cellRow.querySelectorAll(".cell")[index - 1];
+      if (prev) { e.preventDefault(); prev.focus(); }
+    }
+  }
+
+  function updateCellsState() {
+    cellRow.querySelectorAll(".cell").forEach((c) => c.classList.toggle("empty", !c.value));
+  }
+
+  // Composición final: celdas no vacías en un único string, mayúsculas y sin espacios
+  function composeCells() {
+    return [...cellRow.querySelectorAll(".cell")]
+      .map((c) => c.value.toUpperCase())
+      .join("")
+      .replace(/\s+/g, "");
+  }
+
+  function clearCells() {
+    cellRow.innerHTML = "";
+    cellRow.hidden = true;
+    cellHint.hidden = true;
+  }
+
+  function closeResult() {
+    resultOverlay.hidden = true;
+    ocrText.textContent = "";
+    clearCells();
+    if (staticImage) resumeStatic(); // sigue en la foto: se puede reencuadrar y reintentar
+    else resumeLive();
+  }
+
+  function resumeLive() {
+    if (stream && !live) {
+      live = true;
+      render();
+      showHint();
+
+      if (streaming) {
+        renderReadout("", null, 0, true);
+        scheduleStream(STREAM_INTERVAL);
+      }
+    }
+  }
+
+  btnAccept.addEventListener("click", () => {
+    const value = spainOnly
+      ? composeCells()
+      : (ocrText.innerText || "").replace(/\n+$/, "").trim();
+    try { navigator.clipboard?.writeText(value); } catch { /* sin portapapeles */ }
+    toast(value ? "Aceptado · " + value : "Aceptado", "ok");
+    closeResult();
+  });
+  btnCancel.addEventListener("click", () => {
+    toast("Captura cancelada");
+    closeResult();
+  });
+
+  // Atajos de teclado (escritorio)
+  ocrText.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); btnAccept.click(); }
+    else if (e.key === "Escape") { e.preventDefault(); btnCancel.click(); }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !resultOverlay.hidden) btnCancel.click();
+  });
+})();
+</script>
+</body>
+</html>
